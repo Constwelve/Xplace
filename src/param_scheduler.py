@@ -125,12 +125,15 @@ class ParamScheduler:
         self.enable_fence = data.enable_fence
 
         # routability parameter
-        self.enable_route = args.use_route_force or args.use_cell_inflate
+        self.enable_route = args.use_route_force or args.use_cell_inflate or args.use_admm_route_refine
         self.use_cell_inflate = args.use_cell_inflate
         self.use_route_force = args.use_route_force
+        self.use_admm_route_refine = args.use_admm_route_refine
         self.route_weight = args.route_weight
+        self.admm_route_weight = args.admm_route_weight
         self.congest_weight = args.congest_weight
         self.base_route_weight = args.route_weight
+        self.base_admm_route_weight = args.admm_route_weight
         self.base_congest_weight = args.congest_weight
         self.pseudo_weight = args.pseudo_weight
         self.num_route_iter = args.num_route_iter
@@ -169,7 +172,7 @@ class ParamScheduler:
         self.set_mixsize_init_param()
 
     def set_route_init_param(
-        self, init_density_weight, init_route_weight, init_congest_weight, data: PlaceData, args
+        self, init_density_weight, init_route_weight, init_congest_weight, init_admm_weight, data: PlaceData, args
     ):
         # init_density_weight
         # self.density_weight = args.density_weight * init_density_weight
@@ -178,8 +181,10 @@ class ParamScheduler:
         self.precond_coef = 1.0
         self.mu = 1.0
         self.base_route_weight = init_route_weight * args.route_weight
+        self.base_admm_route_weight = init_admm_weight * args.admm_route_weight
         self.base_congest_weight = init_congest_weight * args.congest_weight
         self.route_weight = copy.deepcopy(self.density_weight) * self.base_route_weight
+        self.admm_route_weight = copy.deepcopy(self.density_weight) * self.base_admm_route_weight
         self.congest_weight = copy.deepcopy(self.density_weight) * self.base_congest_weight
         self.pseudo_weight = args.pseudo_weight # same scale as wirelength weight
         self.update_precond_weight(data)
@@ -200,14 +205,16 @@ class ParamScheduler:
                 self.enable_route = False
                 self.use_cell_inflate = False
                 self.use_route_force = False
+                self.use_admm_route_refine = False
             else:
                 self.include_macros = False
                 self.stop_overflow = args.stop_overflow
                 self.enable_sample_force = args.enable_sample_force
                 self.skip_update = False if args.enable_skip_update else None
-                self.enable_route = args.use_route_force or args.use_cell_inflate
+                self.enable_route = args.use_route_force or args.use_cell_inflate or args.use_admm_route_refine
                 self.use_cell_inflate = args.use_cell_inflate
                 self.use_route_force = args.use_route_force
+                self.use_admm_route_refine = args.use_admm_route_refine
 
     def reset_best_sol(self):
         # best solution
@@ -310,7 +317,7 @@ class ParamScheduler:
         return max(lhs + rhs - 1, 0)
 
     def step_route_weight(self):
-        if self.iter - self.init_iter < 1 or not self.use_route_force:
+        if self.iter - self.init_iter < 1 or not (self.use_route_force or self.use_admm_route_refine):
             return
         if self.start_route_opt:
             if self.start_route_iter is None:
@@ -318,13 +325,16 @@ class ParamScheduler:
             iter_diff = self.iter - self.start_route_iter
             sigma = self.param_smooth_func(iter_diff, end_iter=self.num_route_iter)
             self.route_weight = copy.deepcopy(self.density_weight) * self.base_route_weight * sigma
+            self.admm_route_weight = copy.deepcopy(self.density_weight) * self.base_admm_route_weight * sigma
             self.congest_weight = copy.deepcopy(self.density_weight) * self.base_congest_weight * sigma
             if iter_diff > self.num_route_iter:
                 self.start_route_opt = False
                 self.start_route_iter = None
                 print("End route optimization")
             if self.iter % 10 == 0:
-                print("density %.4f route %.4f congest %.4f" % (self.density_weight, self.route_weight, self.congest_weight))
+                print("density %.4f route %.4f admm %.4f congest %.4f" % (
+                    self.density_weight, self.route_weight, self.admm_route_weight, self.congest_weight
+                ))
         else:
             pass
 
@@ -340,7 +350,7 @@ class ParamScheduler:
     def step_precond_coef(self):
         if not self.use_precond:
             return
-        if self.use_route_force:
+        if self.use_route_force or self.use_admm_route_refine:
             return
         if self.recorder.overflow[self.iter] < 0.3 and self.precond_coef < 1024:
             if (self.iter - self.init_iter) % 20 == 0:
@@ -351,12 +361,13 @@ class ParamScheduler:
             return
         alpha_1 = data.mov_node_to_num_pins
         alpha_2 = self.precond_coef * self.density_weight * data.mov_node_area
-        if self.use_route_force and self.start_route_opt:
+        if (self.use_route_force or self.use_admm_route_refine) and self.start_route_opt:
             alpha_route = self.route_weight * data.mov_node_to_num_pins
+            alpha_admm = self.admm_route_weight * data.mov_node_to_num_pins
             alpha_congest = self.congest_weight * data.mov_node_area
             alpha_pseudo = self.pseudo_weight * self.mov_node_to_num_pseudo_pins
             self.precond_weight = (
-                alpha_1 + alpha_2 + alpha_route + alpha_congest + alpha_pseudo
+                alpha_1 + alpha_2 + alpha_route + alpha_admm + alpha_congest + alpha_pseudo
             ).clamp_(min=1.0)
         else:
             self.precond_weight = (
@@ -480,7 +491,7 @@ class ParamScheduler:
 
     def check_divergence(self, window=50, threshold=0.05):
         logger = self.__logger__
-        if self.best_metric["hpwl"] == float("inf"):
+        if self.best_metric["hpwl"] == float("inf") or self.best_metric["hpwl"] <= 0:
             return False
         if self.iter - self.init_iter <= window:
             return False

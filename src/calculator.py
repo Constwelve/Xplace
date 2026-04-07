@@ -36,12 +36,19 @@ def calc_obj_and_grad(
             mov_node_pos.grad = torch.zeros_like(mov_node_pos).detach()
 
         if ps.use_route_force and ps.start_route_opt:
-            mov_route_grad, mov_congest_grad, mov_pseudo_grad = route_fn(
+            mov_route_grad, mov_congest_grad, mov_pseudo_grad, mov_admm_grad = route_fn(
                 mov_node_pos, mov_node_size, expand_ratio, constraint_fn
             )
             mov_node_pos.grad += mov_route_grad * ps.route_weight
             mov_node_pos.grad += mov_congest_grad * ps.congest_weight
             mov_node_pos.grad += mov_pseudo_grad * ps.pseudo_weight
+            if ps.use_admm_route_refine:
+                mov_node_pos.grad += mov_admm_grad * ps.admm_route_weight
+        elif ps.use_admm_route_refine and ps.start_route_opt:
+            _, _, _, mov_admm_grad = route_fn(
+                mov_node_pos, mov_node_size, expand_ratio, constraint_fn
+            )
+            mov_node_pos.grad += mov_admm_grad * ps.admm_route_weight
 
         wl_loss, conn_node_grad_by_wl = merged_wl_loss_grad(
             conn_node_pos, data.pin_id2node_id, data.pin_rel_cpos,
@@ -90,4 +97,3 @@ def calc_obj_and_grad(
         loss = wl_loss + ps.density_weight * density_loss
 
     return loss, grad
-

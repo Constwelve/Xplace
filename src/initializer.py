@@ -137,18 +137,25 @@ def init_params(
         _, filler_lhs = data.movable_connected_index
         filler_rhs = mov_node_pos.shape[0]
 
-        mov_route_grad, mov_congest_grad, mov_pseudo_grad = route_fn(
+        mov_route_grad, mov_congest_grad, mov_pseudo_grad, mov_admm_grad = route_fn(
             mov_node_pos, mov_node_size, expand_ratio, trunc_node_pos_fn
         )
         if mov_pseudo_grad is not None:
             wl_grad.add_(mov_pseudo_grad * args.pseudo_weight)
         init_density_weight = (wl_grad.norm(p=1) / density_grad.norm(p=1)).detach()
-        init_route_weight = (density_grad.abs().max() / mov_route_grad.abs().max()).detach()
+        init_route_weight = 0.0
+        if args.use_route_force and mov_route_grad is not None and mov_route_grad.abs().max() > 0:
+            init_route_weight = (density_grad.abs().max() / mov_route_grad.abs().max()).detach()
         # init_route_weight = (wl_grad[:filler_lhs].norm(p=1) / mov_route_grad[:filler_lhs].norm(p=1)).detach()
-        init_congest_weight = (density_grad.abs().max() / mov_congest_grad.abs().max()).detach()
+        init_congest_weight = 0.0
+        if mov_congest_grad is not None and mov_congest_grad.abs().max() > 0:
+            init_congest_weight = (density_grad.abs().max() / mov_congest_grad.abs().max()).detach()
+        init_admm_weight = 0.0
+        if args.use_admm_route_refine and mov_admm_grad is not None and mov_admm_grad.abs().max() > 0:
+            init_admm_weight = (density_grad.abs().max() / mov_admm_grad.abs().max()).detach()
         # print("Weight den: %.4f route: %.4f congest: %.4f" % (init_density_weight, init_route_weight, init_congest_weight))
         ps.set_route_init_param(
-            init_density_weight, init_route_weight, init_congest_weight, data, args
+            init_density_weight, init_route_weight, init_congest_weight, init_admm_weight, data, args
         )
     elif args.timing_opt:
         init_pin_weight = torch.ones(data.num_pins, dtype=torch.float32, device=data.device)

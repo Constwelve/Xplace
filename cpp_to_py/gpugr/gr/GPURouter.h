@@ -50,6 +50,17 @@ public:
                                 float unit_wire_cost,
                                 float unit_via_cost,
                                 int num_nodes);
+    torch::Tensor calcAdmmRouteGrad(torch::Tensor overflow_map,
+                                    torch::Tensor dist_weights,
+                                    torch::Tensor wirelength_weights,
+                                    torch::Tensor node2pin_list,
+                                    torch::Tensor node2pin_list_end,
+                                    torch::Tensor mov_node_pos,
+                                    torch::Tensor mov_node_anchor_pos,
+                                    float route_weight,
+                                    float anchor_weight,
+                                    int num_nodes,
+                                    int num_movable_nodes);
     torch::Tensor calcFillerRouteGrad(torch::Tensor filler_pos,
                                       torch::Tensor filler_size,
                                       torch::Tensor filler_weight,

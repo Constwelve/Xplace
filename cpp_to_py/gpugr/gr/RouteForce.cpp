@@ -101,6 +101,30 @@ torch::Tensor RouteForce::calcRouteGrad(torch::Tensor mask_map,
                                 num_nodes);
 };
 
+torch::Tensor RouteForce::calcAdmmRouteGrad(torch::Tensor overflow_map,
+                                            torch::Tensor dist_weights,
+                                            torch::Tensor wirelength_weights,
+                                            torch::Tensor node2pin_list,
+                                            torch::Tensor node2pin_list_end,
+                                            torch::Tensor mov_node_pos,
+                                            torch::Tensor mov_node_anchor_pos,
+                                            float route_weight,
+                                            float anchor_weight,
+                                            int num_nodes,
+                                            int num_movable_nodes) {
+    return router.calcAdmmRouteGrad(overflow_map,
+                                    dist_weights,
+                                    wirelength_weights,
+                                    node2pin_list,
+                                    node2pin_list_end,
+                                    mov_node_pos,
+                                    mov_node_anchor_pos,
+                                    route_weight,
+                                    anchor_weight,
+                                    num_nodes,
+                                    num_movable_nodes);
+}
+
 torch::Tensor RouteForce::calcFillerRouteGrad(torch::Tensor filler_pos,
                                               torch::Tensor filler_size,
                                               torch::Tensor filler_weight,

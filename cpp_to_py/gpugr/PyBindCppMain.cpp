@@ -60,6 +60,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         .def("dmd_map", &gr::RouteForce::getDemandMap, py::return_value_policy::move)
         .def("cap_map", &gr::RouteForce::getCapacityMap, py::return_value_policy::move)
         .def("route_grad", &gr::RouteForce::calcRouteGrad, py::return_value_policy::move)
+        .def("admm_route_grad", &gr::RouteForce::calcAdmmRouteGrad, py::return_value_policy::move)
         .def("filler_route_grad", &gr::RouteForce::calcFillerRouteGrad, py::return_value_policy::move)
         .def("pseudo_grad", &gr::RouteForce::calcPseudoPinGrad, py::return_value_policy::move)
         .def("inflate_ratio", &gr::RouteForce::calcNodeInflateRatio, py::return_value_policy::move)

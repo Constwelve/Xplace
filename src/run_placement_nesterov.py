@@ -247,6 +247,15 @@ def global_placement_main(gpdb, rawdb, ps: ParamScheduler, data: PlaceData, args
                 # if ps.recorder.overflow[-2] < 0.2 and ps.recorder.overflow[-1] >= 0.2 and ps.start_route_opt:
                 #     ps.start_route_opt = False
                 #     ps.curr_optimizer_cnt += 1
+        if ps.use_admm_route_refine:
+            if ps.iter > 100 and ps.enable_route:
+                if (
+                    ps.recorder.overflow[-1] < args.admm_route_start_overflow and
+                    ps.recorder.overflow[-2] >= args.admm_route_start_overflow and
+                    not ps.start_route_opt
+                ):
+                    ps.start_route_opt = True
+                    ps.curr_optimizer_cnt += 1
 
         # if ps.use_cell_inflate and ps.curr_optimizer_cnt < ps.max_route_opt:
         #     if ps.iter > 100 and ps.enable_route:
@@ -257,7 +266,11 @@ def global_placement_main(gpdb, rawdb, ps: ParamScheduler, data: PlaceData, args
         #             ps.start_route_opt = False
 
         if ps.start_route_opt and ps.enable_route:
-            if (ps.iter % args.route_freq == 0 and ps.use_route_force) or \
+            should_refresh_route = (
+                (ps.use_route_force and ps.iter % args.route_freq == 0) or
+                (ps.use_admm_route_refine and ps.iter % args.admm_route_freq == 0)
+            )
+            if should_refresh_route or \
                   (ps.curr_optimizer_cnt != ps.prev_optimizer_cnt and ps.curr_optimizer_cnt <= ps.max_route_opt):
                 ps.rerun_route = True
             else:
@@ -281,10 +294,10 @@ def global_placement_main(gpdb, rawdb, ps: ParamScheduler, data: PlaceData, args
                     gr_metrics, new_mov_node_size, new_expand_ratio = output
                     ps.push_gr_sol(gr_metrics, hpwl, overflow, mov_node_pos)
             route_fn=None
-            if ps.use_route_force:
+            if ps.use_route_force or ps.use_admm_route_refine:
                 route_fn=calc_route_force
             ps.prev_optimizer_cnt = ps.curr_optimizer_cnt
-            if ps.use_cell_inflate or ps.use_route_force:
+            if ps.use_cell_inflate or ps.use_route_force or ps.use_admm_route_refine:
                 logger.info("Reset optimizer...")
                 if new_mov_node_size is not None:
                     # remove some fillers, we should update the size the pos
@@ -314,13 +327,14 @@ def global_placement_main(gpdb, rawdb, ps: ParamScheduler, data: PlaceData, args
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = cur_lr.item()
                 logger.info(
-                    "Route Iter: %d | lr: %.2E density_weight: %.2E route_weight: %.2E "
+                    "Route Iter: %d | lr: %.2E density_weight: %.2E route_weight: %.2E admm_route_weight: %.2E "
                     "congest_weight: %.2E pseudo_weight: %.2E " 
                     % (
                         ps.curr_optimizer_cnt - 1,
                         cur_lr.item(),
                         ps.density_weight,
                         ps.route_weight,
+                        ps.admm_route_weight,
                         ps.congest_weight,
                         ps.pseudo_weight,
                     )
@@ -461,9 +475,17 @@ def run_placement_main_nesterov(args, logger):
         wns_early_gp, tns_early_gp, wns_late_gp, tns_late_gp = timing_eval_func(node_pos)
 
     # detail placement
-    node_pos, dp_hpwl, top5overflow, lg_time, dp_time = detail_placement_main(
-        node_pos, gpdb, rawdb, ps, data, args, logger
-    )
+    if args.legalization or args.detail_placement:
+        if detail_placement_main is None:
+            raise ModuleNotFoundError("detail placement requires optional dependency 'igraph'")
+        node_pos, dp_hpwl, top5overflow, lg_time, dp_time = detail_placement_main(
+            node_pos, gpdb, rawdb, ps, data, args, logger
+        )
+    else:
+        dp_hpwl = gp_hpwl
+        top5overflow = overflow
+        lg_time = 0.0
+        dp_time = 0.0
     if args.timing_opt:
         wns_early_dp, tns_early_dp, wns_late_dp, tns_late_dp = timing_eval_func(node_pos)
     iteration += 1

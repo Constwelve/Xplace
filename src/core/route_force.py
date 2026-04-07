@@ -19,6 +19,8 @@ class RouteCache:
         self.routeforce = None
         self.route_gradmat: torch.Tensor = None
         self.mov_route_grad: torch.Tensor = None
+        self.mov_admm_grad: torch.Tensor = None
+        self.admm_anchor_pos: torch.Tensor = None
         self.placeable_area = None
         self.target_area = None
         self.whitespace_area = None
@@ -39,6 +41,8 @@ class RouteCache:
         self.routeforce = None
         self.route_gradmat = None
         self.mov_route_grad = None
+        self.mov_admm_grad = None
+        self.admm_anchor_pos = None
         self.placeable_area = None
         self.target_area = None
         self.whitespace_area = None
@@ -182,13 +186,14 @@ def get_route_force(
     mov_route_grad = torch.zeros_like(mov_node_pos)
     mov_congest_grad = torch.zeros_like(mov_node_pos)
     mov_pseudo_grad = torch.zeros_like(mov_node_pos)
+    mov_admm_grad = torch.zeros_like(mov_node_pos)
 
     # 1) run global routing and compute gradient mat
     grdb, input_mat, routeforce, route_gradmat = None, None, None, None
     if ps.rerun_route:
         output = run_gr_and_fft_main(
             args, logger, data, rawdb, gpdb, ps, mov_node_pos, 
-            constraint_fn=constraint_fn, skip_m1_route=skip_m1_route
+            constraint_fn=constraint_fn, skip_m1_route=skip_m1_route, run_fft=ps.use_route_force
         )
         grdb, routeforce, input_mat, cg_mapHV, map_raw, map_2d, route_gradmat, gr_metrics = output
         dmd_map, wire_dmd_map, via_dmd_map, cap_map = map_raw
@@ -196,23 +201,40 @@ def get_route_force(
         # ------------------------------------------------------------
         # 2) start force computation
         # 2.1) compute routing wire force
-        conn_route_grad = conn_route_force(
-            num_conn_nodes, input_mat, wire_dmd_map2d, via_dmd_map2d, cap_map2d,
-            route_gradmat, routeforce, args, data
-        )
-        mov_route_grad[mov_lhs:mov_rhs] = conn_route_grad[mov_lhs:mov_rhs]
+        if ps.use_route_force:
+            conn_route_grad = conn_route_force(
+                num_conn_nodes, input_mat, wire_dmd_map2d, via_dmd_map2d, cap_map2d,
+                route_gradmat, routeforce, args, data
+            )
+            mov_route_grad[mov_lhs:mov_rhs] = conn_route_grad[mov_lhs:mov_rhs]
 
         route_cache.grdb = grdb
         route_cache.input_mat = input_mat
         route_cache.routeforce = routeforce
         route_cache.route_gradmat = route_gradmat
         route_cache.mov_route_grad = mov_route_grad
+        route_cache.admm_anchor_pos = mov_node_pos[mov_lhs:filler_lhs].detach().clone()
     else:
         grdb = route_cache.grdb
         input_mat = route_cache.input_mat
         routeforce = route_cache.routeforce
         route_gradmat = route_cache.route_gradmat
         mov_route_grad = route_cache.mov_route_grad
+
+    if ps.use_admm_route_refine and ps.start_route_opt and routeforce is not None and input_mat is not None:
+        conn_mov_node_pos = mov_node_pos[mov_lhs:filler_lhs].contiguous()
+        anchor_pos = route_cache.admm_anchor_pos
+        if anchor_pos is None or anchor_pos.shape != conn_mov_node_pos.shape:
+            anchor_pos = conn_mov_node_pos.detach().clone()
+            route_cache.admm_anchor_pos = anchor_pos
+        mov_admm_conn_grad = admm_route_force(
+            num_conn_nodes, filler_lhs - mov_lhs, input_mat, routeforce,
+            conn_mov_node_pos, anchor_pos, args, data
+        )
+        mov_admm_grad[mov_lhs:filler_lhs] = mov_admm_conn_grad[mov_lhs:filler_lhs]
+        route_cache.mov_admm_grad = mov_admm_grad
+    elif not ps.rerun_route and route_cache.mov_admm_grad is not None:
+        mov_admm_grad = route_cache.mov_admm_grad
 
     ps.mov_node_to_num_pseudo_pins = torch.zeros_like(mov_node_pos)
 
@@ -237,7 +259,7 @@ def get_route_force(
         mov_congest_grad, mov_pseudo_grad = None, None
         logger.warning("No filler, cannot use filler route force")
 
-    return mov_route_grad, mov_congest_grad, mov_pseudo_grad
+    return mov_route_grad, mov_congest_grad, mov_pseudo_grad, mov_admm_grad
 
 
 def run_gr_and_fft_main(
@@ -422,6 +444,33 @@ def conn_route_force(
     )
 
     return conn_route_grad
+
+
+def admm_route_force(
+    num_conn_nodes, num_movable_nodes, input_mat, routeforce, mov_node_pos, anchor_pos, args, data
+):
+    device = torch.device(
+        "cuda:{}".format(args.gpu) if torch.cuda.is_available() else "cpu"
+    )
+    max_n_grid = max(input_mat.shape[0], input_mat.shape[1])
+    overflow_map = input_mat.contiguous()
+    dist_weights = torch.ones(max_n_grid + 2, device=device)
+    dist_weights[1:] = 1.0 / torch.sqrt(torch.arange(1, max_n_grid + 2, device=device, dtype=torch.float32))
+    wirelength_weights = torch.ones(max_n_grid + 2, device=device)
+    admm_route_grad: torch.Tensor = routeforce.admm_route_grad(
+        overflow_map,
+        dist_weights,
+        wirelength_weights,
+        data.node2pin_list,
+        data.node2pin_list_end,
+        mov_node_pos,
+        anchor_pos,
+        1.0,
+        args.admm_anchor_weight,
+        num_conn_nodes,
+        num_movable_nodes,
+    )
+    return admm_route_grad
 
 
 def cell_congestion_force(

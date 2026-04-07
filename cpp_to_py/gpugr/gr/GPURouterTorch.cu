@@ -165,6 +165,93 @@ __global__ void assignRouteForceToPlPin(
     }
 }
 
+__global__ void compGcellAdmmRouteForce(
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> gbpin_grad,
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> overflow_map,
+    const torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> dist_weights,
+    const torch::PackedTensorAccessor32<float, 1, torch::RestrictPtrTraits> wirelength_weights,
+    float route_weight,
+    int *gbpinRoutes, int *gbpin2netId, int *routes, int *routesOffset,
+    int numGbPin, int N, int LAYER, int xSize, int ySize, int DIRECTION
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numGbPin) {
+        int netId = gbpin2netId[idx];
+        routes += routesOffset[netId];
+        if (routes[0] == -1) {
+            return;
+        }
+        gbpinRoutes += idx * 6;
+        int numGbpinRoutes = gbpinRoutes[0];
+        for (int i = 1; i < 1 + numGbpinRoutes; i++) {
+            int routeId = gbpinRoutes[i];
+            bool reverseRoute = false;
+            if (routeId < 0) {
+                routeId = -routeId;
+                reverseRoute = true;
+            }
+            int p = routes[routeId];
+            int l = p / N / N, x = p % (N * N) / N, y = p % N;
+            if (!(l & 1) ^ DIRECTION) cudaSwapInt(x, y);
+            int lx = x, hx = x, ly = y, hy = y;
+            if ((l & 1) ^ DIRECTION) {
+                hy += routes[routeId + 1];
+            } else {
+                hx += routes[routeId + 1];
+            }
+
+            if (lx != hx && ly == hy) {
+                float score = 0.0;
+                float total_weight = 0.0;
+                for (int j = lx; j <= hx; j++) {
+                    if (j < xSize && ly < ySize) {
+                        int dist = reverseRoute ? (hx - j) : (j - lx);
+                        float cur_dist_weight = dist_weights[dist];
+                        score += overflow_map[j][ly] * cur_dist_weight;
+                        total_weight += cur_dist_weight;
+                    }
+                }
+                if (total_weight > 0.0) {
+                    float direction = reverseRoute ? -1.0f : 1.0f;
+                    gbpin_grad[idx][0] += -direction * route_weight * score / total_weight
+                                          * wirelength_weights[hx - lx + 1];
+                }
+            } else if (ly != hy && lx == hx) {
+                float score = 0.0;
+                float total_weight = 0.0;
+                for (int j = ly; j <= hy; j++) {
+                    if (lx < xSize && j < ySize) {
+                        int dist = reverseRoute ? (hy - j) : (j - ly);
+                        float cur_dist_weight = dist_weights[dist];
+                        score += overflow_map[lx][j] * cur_dist_weight;
+                        total_weight += cur_dist_weight;
+                    }
+                }
+                if (total_weight > 0.0) {
+                    float direction = reverseRoute ? -1.0f : 1.0f;
+                    gbpin_grad[idx][1] += -direction * route_weight * score / total_weight
+                                          * wirelength_weights[hy - ly + 1];
+                }
+            }
+        }
+    }
+}
+
+__global__ void addAnchorGrad(
+    torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> node_grad,
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> mov_node_pos,
+    const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> mov_node_anchor_pos,
+    float anchor_weight,
+    int num_movable_nodes
+) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    const int i = index >> 1;
+    if (i < num_movable_nodes) {
+        const int c = index & 1;
+        node_grad[i][c] += anchor_weight * (mov_node_pos[i][c] - mov_node_anchor_pos[i][c]);
+    }
+}
+
 __global__ void fillerRouteForce(
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> filler_pos,
     const torch::PackedTensorAccessor32<float, 2, torch::RestrictPtrTraits> filler_size,
@@ -461,6 +548,59 @@ torch::Tensor GPURouter::calcRouteGrad(torch::Tensor mask_map,
         node2pin_list.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
         node2pin_list_end.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
         num_nodes);
+
+    return node_grad;
+}
+
+torch::Tensor GPURouter::calcAdmmRouteGrad(torch::Tensor overflow_map,
+                                           torch::Tensor dist_weights,
+                                           torch::Tensor wirelength_weights,
+                                           torch::Tensor node2pin_list,
+                                           torch::Tensor node2pin_list_end,
+                                           torch::Tensor mov_node_pos,
+                                           torch::Tensor mov_node_anchor_pos,
+                                           float route_weight,
+                                           float anchor_weight,
+                                           int num_nodes,
+                                           int num_movable_nodes) {
+    torch::Tensor gbpin_grad = torch::zeros({numGbPin, 2},
+                        torch::dtype(torch::kFloat32).device(torch::Device(torch::kCUDA, DEVICE_ID)));
+    compGcellAdmmRouteForce<<<BLOCK_NUMBER(numGbPin), BLOCK_SIZE>>>(
+        gbpin_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        overflow_map.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        dist_weights.packed_accessor32<float, 1, torch::RestrictPtrTraits>(),
+        wirelength_weights.packed_accessor32<float, 1, torch::RestrictPtrTraits>(),
+        route_weight,
+        gbpinRoutes, gbpin2netId, routes, routesOffset,
+        numGbPin, N, LAYER, X, Y, DIRECTION
+    );
+
+    torch::Tensor plpin_grad = torch::zeros({numPlPin, 2},
+                        torch::dtype(torch::kFloat32).device(torch::Device(torch::kCUDA, DEVICE_ID)));
+    assignRouteForceToPlPin<<<BLOCK_NUMBER(numPlPin), BLOCK_SIZE>>>(
+        plpin_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        gbpin_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        plPinId2gbPinId, numPlPin
+    );
+
+    auto node_grad = torch::zeros({num_nodes, 2}, torch::dtype(plpin_grad.dtype()).device(plpin_grad.device()));
+    const int threads = 128;
+    const int blocks = (num_nodes * 2 + threads - 1) / threads;
+    calc_node_grad_deterministic_cuda_kernel<<<blocks, threads, 0>>>(
+        node_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        plpin_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        node2pin_list.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+        node2pin_list_end.packed_accessor32<int64_t, 1, torch::RestrictPtrTraits>(),
+        num_nodes);
+
+    const int anchor_blocks = (num_movable_nodes * 2 + threads - 1) / threads;
+    addAnchorGrad<<<anchor_blocks, threads, 0>>>(
+        node_grad.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        mov_node_pos.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        mov_node_anchor_pos.packed_accessor32<float, 2, torch::RestrictPtrTraits>(),
+        anchor_weight,
+        num_movable_nodes
+    );
 
     return node_grad;
 }
