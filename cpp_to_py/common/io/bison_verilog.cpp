@@ -26,6 +26,9 @@ public:
     VerilogParser(Database *db, bool lef_read, bool def_read) : db(*db), lef_read(lef_read), def_read(def_read) {}
     virtual ~VerilogParser() {}
     vector<verilog::Port> ports;
+    size_t skipped_undefined_net_refs = 0;
+    size_t skipped_undefined_pin_refs = 0;
+    size_t skipped_bus_net_refs = 0;
 
     void add_module(std::string &&name) { 
         std::cout << "Module name = " << name << '\n'; 
@@ -139,7 +142,13 @@ public:
             // cell = db.addCell(cellName, celltype);
         }
         for (size_t i = 0; i < inst.pin_names.size(); i++) {
-            if (inst.net_names[i].size() > 1) logger.error("Bus net name is not supported\n");
+            if (inst.net_names[i].size() > 1) {
+                skipped_bus_net_refs++;
+                if (skipped_bus_net_refs <= 20) {
+                    logger.warning("Bus net name is not supported on %s.%zu; skip connection", cellName.c_str(), i);
+                }
+                continue;
+            }
             // define std::string and NetBit visit methods
             std::string pin_name =
                 std::visit(overloaded{
@@ -164,14 +173,36 @@ public:
             std::string netName(net_name);
             netName = validate_token(netName);
             Net *net = db.getNet(netName);
-            if (!net) logger.error("Net is not defined: %s", netName.c_str());
+            if (!net) {
+                skipped_undefined_net_refs++;
+                if (skipped_undefined_net_refs <= 20) {
+                    logger.warning(
+                        "Net is not defined: %s; skip %s.%s",
+                        netName.c_str(),
+                        cellName.c_str(),
+                        pinName.c_str());
+                }
+                continue;
+            }
             Pin *pin;
             if (def_read) {
                 pin = cell->pin(pinName);
-                if (!pin) logger.error("Pin is not defined: %s", pinName.c_str());
+                if (!pin) {
+                    skipped_undefined_pin_refs++;
+                    if (skipped_undefined_pin_refs <= 20) {
+                        logger.warning("Pin is not defined: %s.%s; skip connection", cellName.c_str(), pinName.c_str());
+                    }
+                    continue;
+                }
             } else {
                 pin = cell->pin(pinName);
-                if (!pin) logger.error("Pin is not defined: %s", pinName.c_str());
+                if (!pin) {
+                    skipped_undefined_pin_refs++;
+                    if (skipped_undefined_pin_refs <= 20) {
+                        logger.warning("Pin is not defined: %s.%s; skip connection", cellName.c_str(), pinName.c_str());
+                    }
+                    continue;
+                }
             }
             pin->net = net;
             net->addPin(pin);
@@ -191,12 +222,20 @@ void removeDuplicates(std::vector<T> &vec) {
 bool Database::readVerilog_yy(const std::string &file) {
     verilog_parser = new VerilogParser(this, lef_read, def_read);
     verilog_parser->read(file);
+    if (verilog_parser->skipped_undefined_net_refs || verilog_parser->skipped_undefined_pin_refs || verilog_parser->skipped_bus_net_refs) {
+        logger.warning(
+            "Verilog read skipped connections: undefined nets=%zu, undefined pins=%zu, bus refs=%zu",
+            verilog_parser->skipped_undefined_net_refs,
+            verilog_parser->skipped_undefined_pin_refs,
+            verilog_parser->skipped_bus_net_refs);
+    }
 
     // remove empty nets
     for (int i = 0; i < (int)nets.size(); i++) {
         if (nets[i]->pins.size() == 0) {
+            string emptyNetName = nets[i]->name;
             nets.erase(nets.begin() + i);
-            logger.warning("Empty net %s", nets[i]->name.c_str());
+            logger.warning("Empty net %s", emptyNetName.c_str());
             i--;
         }
     }

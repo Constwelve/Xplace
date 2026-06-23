@@ -10,6 +10,9 @@
 #include "common/db/SNet.h"
 #include "common/db/Via.h"
 
+#include <sstream>
+#include <stdexcept>
+
 namespace gp {
 
 GPDatabase::~GPDatabase() { logger.info("destruct gpdb"); }
@@ -190,6 +193,51 @@ void GPDatabase::setupNum() {
 
 void GPDatabase::setupNodes() {
     // preprocess nodes in database
+    size_t missing_celltype_count = 0;
+    size_t missing_region_count = 0;
+    std::vector<std::string> missing_celltype_names;
+    std::vector<std::string> missing_region_names;
+    for (index_type i = 0; i < static_cast<index_type>(database.cells.size()); i++) {
+        auto cell = database.cells[i];
+        if (!cell->ctype()) {
+            missing_celltype_count++;
+            if (missing_celltype_names.size() < 10) {
+                missing_celltype_names.emplace_back(cell->name());
+            }
+        }
+        if (!cell->region) {
+            missing_region_count++;
+            if (missing_region_names.size() < 10) {
+                missing_region_names.emplace_back(cell->name());
+            }
+        }
+    }
+    if (missing_celltype_count || missing_region_count) {
+        std::ostringstream oss;
+        oss << "GPDatabase::setupNodes cannot build placement nodes:";
+        if (missing_celltype_count) {
+            oss << " missing cell types=" << missing_celltype_count << " [";
+            for (size_t i = 0; i < missing_celltype_names.size(); ++i) {
+                if (i) {
+                    oss << ", ";
+                }
+                oss << missing_celltype_names[i];
+            }
+            oss << "]";
+        }
+        if (missing_region_count) {
+            oss << " missing regions=" << missing_region_count << " [";
+            for (size_t i = 0; i < missing_region_names.size(); ++i) {
+                if (i) {
+                    oss << ", ";
+                }
+                oss << missing_region_names[i];
+            }
+            oss << "]";
+        }
+        throw std::runtime_error(oss.str());
+    }
+
     std::vector<index_type> all_mov_ids;
     all_mov_ids.reserve(database.cells.size());
     std::vector<index_type> all_fix_ids;

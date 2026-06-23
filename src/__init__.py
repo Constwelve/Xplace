@@ -7,7 +7,7 @@ from .nesterov_optimizer import NesterovOptimizer
 from .param_scheduler import ParamScheduler
 try:
     from .detail_placement import detail_placement_main, macro_legalization_main
-except ModuleNotFoundError:
+except (ImportError, ModuleNotFoundError):
     detail_placement_main = None
     macro_legalization_main = None
 from .run_placement_nesterov import run_placement_main_nesterov
