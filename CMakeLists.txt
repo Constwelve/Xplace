@@ -102,6 +102,10 @@ if(NOT PYTHON_EXECUTABLE)
   find_package(Python COMPONENTS Interpreter Development REQUIRED)
   set(PYTHON_EXECUTABLE ${Python_EXECUTABLE})
 endif()
+if(NOT PYTHON_INCLUDE_DIRS)
+  find_package(Python COMPONENTS Interpreter Development REQUIRED)
+  set(PYTHON_INCLUDE_DIRS ${Python_INCLUDE_DIRS})
+endif()
 
 if(NOT TARGET torch)
   execute_process(COMMAND ${PYTHON_EXECUTABLE} -c 
