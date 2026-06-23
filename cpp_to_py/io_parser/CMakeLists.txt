@@ -14,4 +14,4 @@ target_compile_options(io_parser PRIVATE -fPIC)
 
 install(TARGETS 
     io_parser
-    DESTINATION ${XPLACE_LIB_DIR})
+    DESTINATION ${XPLACE_INSTALL_LIB_DEST})

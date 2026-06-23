@@ -6,6 +6,11 @@ endif()
 
 project(xplace LANGUAGES C CXX CUDA)
 
+option(XPLACE_BUILD_GPUGR_ONLY "Build only the GPUGR/IOParser backend needed by RUPlace" ON)
+option(XPLACE_EMBEDDED_IN_DREAMPLACE "Build as a DREAMPlace third-party subdirectory" OFF)
+set(XPLACE_INSTALL_PY_DEST "" CACHE STRING "Install destination for the XplaceGPUGR Python root; empty means install prefix root")
+set(XPLACE_INSTALL_LIB_DEST "" CACHE STRING "Install destination for GPUGR Python extensions; defaults under XPLACE_INSTALL_PY_DEST")
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -17,10 +22,31 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 message(STATUS PROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR})
 set(PATH_THIRDPARTY_ROOT ${PROJECT_SOURCE_DIR}/thirdparty)
-set(XPLACE_LIB_DIR ${PROJECT_SOURCE_DIR}/cpp_to_py/cpybin)
+if(NOT XPLACE_LIB_DIR)
+  set(XPLACE_LIB_DIR ${PROJECT_BINARY_DIR}/cpp_to_py/cpybin CACHE PATH "Directory for Xplace/GPUGR Python extension build outputs" FORCE)
+endif()
+if(NOT XPLACE_INSTALL_LIB_DEST)
+  if(XPLACE_INSTALL_PY_DEST)
+    set(XPLACE_INSTALL_LIB_DEST "${XPLACE_INSTALL_PY_DEST}/cpp_to_py/cpybin" CACHE STRING "Install destination for GPUGR Python extensions" FORCE)
+  else()
+    set(XPLACE_INSTALL_LIB_DEST "cpp_to_py/cpybin" CACHE STRING "Install destination for GPUGR Python extensions" FORCE)
+  endif()
+endif()
+if(XPLACE_INSTALL_PY_DEST)
+  set(XPLACE_INSTALL_CPP_DEST "${XPLACE_INSTALL_PY_DEST}/cpp_to_py")
+  set(XPLACE_INSTALL_UTILS_DEST "${XPLACE_INSTALL_PY_DEST}/utils")
+  set(XPLACE_INSTALL_FLUTE_DEST "${XPLACE_INSTALL_PY_DEST}/thirdparty/flute")
+else()
+  set(XPLACE_INSTALL_CPP_DEST "cpp_to_py")
+  set(XPLACE_INSTALL_UTILS_DEST "utils")
+  set(XPLACE_INSTALL_FLUTE_DEST "thirdparty/flute")
+endif()
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${XPLACE_LIB_DIR})
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${XPLACE_LIB_DIR})
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-set(CMAKE_INSTALL_RPATH ${XPLACE_LIB_DIR})
+set(CMAKE_BUILD_RPATH ${XPLACE_LIB_DIR})
+set(CMAKE_INSTALL_RPATH "$ORIGIN")
 
 # set _GLIBCXX_USE_CXX11_ABI for torch
 if(NOT CMAKE_CXX_ABI)
@@ -32,7 +58,9 @@ message(STATUS "CMAKE_CXX_ABI: _GLIBCXX_USE_CXX11_ABI=${CMAKE_CXX_ABI}")
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=${CMAKE_CXX_ABI})
 
 # PyBind11
-add_subdirectory(${PATH_THIRDPARTY_ROOT}/pybind11)
+if(NOT TARGET pybind11::module)
+  add_subdirectory(${PATH_THIRDPARTY_ROOT}/pybind11)
+endif()
 message(STATUS "PYTHON_INCLUDE_DIRS: ${PYTHON_INCLUDE_DIRS}")
 
 # Flute
@@ -67,55 +95,64 @@ add_compile_options(
 )
 
 # Torch
-execute_process(COMMAND ${PYTHON_EXECUTABLE} -c 
-  "import torch; print(torch.__path__[0]); print(int(torch.cuda.is_available())); print(torch.__version__);" 
-  OUTPUT_VARIABLE TORCH_OUTPUT OUTPUT_STRIP_TRAILING_WHITESPACE)
-string(REPLACE "\n" ";" TORCH_OUTPUT_LIST ${TORCH_OUTPUT})
-list(GET TORCH_OUTPUT_LIST 0 TORCH_INSTALL_PREFIX)
-list(GET TORCH_OUTPUT_LIST 1 TORCH_ENABLE_CUDA)
-list(GET TORCH_OUTPUT_LIST 2 TORCH_VERSION)
-string(REPLACE "." ";" TORCH_VERSION_LIST ${TORCH_VERSION})
-list(GET TORCH_VERSION_LIST 0 TORCH_VERSION_MAJOR)
-list(GET TORCH_VERSION_LIST 1 TORCH_VERSION_MINOR)
-message(STATUS TORCH_INSTALL_PREFIX=${TORCH_INSTALL_PREFIX})
-message(STATUS TORCH_VERSION=${TORCH_VERSION_MAJOR}.${TORCH_VERSION_MINOR})
-message(STATUS TORCH_ENABLE_CUDA=${TORCH_ENABLE_CUDA})
-if (NOT TORCH_ENABLE_CUDA)
-  message(FATAL_ERROR "Xplace only supports Torch-CUDA mode, exit CMAKE." )
+if(NOT PYTHON_EXECUTABLE AND Python_EXECUTABLE)
+  set(PYTHON_EXECUTABLE ${Python_EXECUTABLE})
+endif()
+if(NOT PYTHON_EXECUTABLE)
+  find_package(Python COMPONENTS Interpreter Development REQUIRED)
+  set(PYTHON_EXECUTABLE ${Python_EXECUTABLE})
+endif()
+
+if(NOT TARGET torch)
+  execute_process(COMMAND ${PYTHON_EXECUTABLE} -c 
+    "import torch; print(torch.__path__[0]); print(int(torch.cuda.is_available())); print(torch.__version__);" 
+    OUTPUT_VARIABLE TORCH_OUTPUT OUTPUT_STRIP_TRAILING_WHITESPACE)
+  string(REPLACE "\n" ";" TORCH_OUTPUT_LIST ${TORCH_OUTPUT})
+  list(GET TORCH_OUTPUT_LIST 0 TORCH_INSTALL_PREFIX)
+  list(GET TORCH_OUTPUT_LIST 1 TORCH_ENABLE_CUDA)
+  list(GET TORCH_OUTPUT_LIST 2 TORCH_VERSION)
+  string(REPLACE "." ";" TORCH_VERSION_LIST ${TORCH_VERSION})
+  list(GET TORCH_VERSION_LIST 0 TORCH_VERSION_MAJOR)
+  list(GET TORCH_VERSION_LIST 1 TORCH_VERSION_MINOR)
+  message(STATUS TORCH_INSTALL_PREFIX=${TORCH_INSTALL_PREFIX})
+  message(STATUS TORCH_VERSION=${TORCH_VERSION_MAJOR}.${TORCH_VERSION_MINOR})
+  message(STATUS TORCH_ENABLE_CUDA=${TORCH_ENABLE_CUDA})
+  if (NOT TORCH_ENABLE_CUDA)
+    message(FATAL_ERROR "GPUGR requires Torch-CUDA mode, exit CMAKE." )
+  endif()
 endif()
 
 # set torch lib
-add_library(torch STATIC IMPORTED)
-find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
-find_library(TORCH_LIBRARY torch PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
-find_library(C10_LIBRARY c10 PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
-find_library(C10_CUDA_LIBRARY c10_cuda PATHS "${TORCH_INSTALL_PREFIX}/lib")
-find_library(TORCH_CPU_LIBRARY torch_cpu PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
-find_library(TORCH_CUDA_LIBRARY torch_cuda PATHS "${TORCH_INSTALL_PREFIX}/lib")
+if(NOT TARGET torch)
+  add_library(torch STATIC IMPORTED)
+  find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
+  find_library(TORCH_LIBRARY torch PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
+  find_library(C10_LIBRARY c10 PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
+  find_library(C10_CUDA_LIBRARY c10_cuda PATHS "${TORCH_INSTALL_PREFIX}/lib")
+  find_library(TORCH_CPU_LIBRARY torch_cpu PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
+  find_library(TORCH_CUDA_LIBRARY torch_cuda PATHS "${TORCH_INSTALL_PREFIX}/lib")
 
-set(LINK_LIBS ${C10_LIBRARY} ${TORCH_CPU_LIBRARY})
-if (TORCH_ENABLE_CUDA)
-  set(LINK_LIBS ${LINK_LIBS}
-    ${C10_CUDA_LIBRARY}
-    ${TORCH_CUDA_LIBRARY})
+  set(LINK_LIBS ${C10_LIBRARY} ${TORCH_CPU_LIBRARY})
+  if (TORCH_ENABLE_CUDA)
+    set(LINK_LIBS ${LINK_LIBS}
+      ${C10_CUDA_LIBRARY}
+      ${TORCH_CUDA_LIBRARY})
+  endif()
+
+  if (EXISTS ${TORCH_INSTALL_PREFIX}/include)
+    set(TORCH_HEADER_PREFIX ${TORCH_INSTALL_PREFIX}/include)
+  endif()
+  set(TORCH_INCLUDE_DIRS
+    ${PYTHON_INCLUDE_DIRS} ${TORCH_HEADER_PREFIX} ${TORCH_HEADER_PREFIX}/torch/csrc/api/include)
+  message(STATUS TORCH_INCLUDE_DIRS=${TORCH_INCLUDE_DIRS})
+
+  set_target_properties(torch PROPERTIES
+    IMPORTED_LOCATION "${TORCH_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${TORCH_INCLUDE_DIRS}"
+    INTERFACE_LINK_LIBRARIES "${LINK_LIBS}"
+    INTERFACE_COMPILE_OPTIONS "-D_GLIBCXX_USE_CXX11_ABI=${CMAKE_CXX_ABI}"
+    )
 endif()
-
-# set torch include
-if (EXISTS ${TORCH_INSTALL_PREFIX}/include)
-  set(TORCH_HEADER_PREFIX ${TORCH_INSTALL_PREFIX}/include)
-endif()
-set(TORCH_INCLUDE_DIRS
-  ${PYTHON_INCLUDE_DIRS} ${TORCH_HEADER_PREFIX} ${TORCH_HEADER_PREFIX}/torch/csrc/api/include)
-message(STATUS TORCH_INCLUDE_DIRS=${TORCH_INCLUDE_DIRS})
-
-# set torch target
-# adapt from https://github.com/limbo018/DREAMPlace/blob/master/cmake/TorchExtension.cmake
-set_target_properties(torch PROPERTIES
-  IMPORTED_LOCATION "${TORCH_LIBRARY}"
-  INTERFACE_INCLUDE_DIRECTORIES "${TORCH_INCLUDE_DIRS}"
-  INTERFACE_LINK_LIBRARIES "${LINK_LIBS}"
-  INTERFACE_COMPILE_OPTIONS "-D_GLIBCXX_USE_CXX11_ABI=${CMAKE_CXX_ABI}"
-  )
 
 function(add_pytorch_extension target_name)
   set(multiValueArgs EXTRA_INCLUDE_DIRS EXTRA_LINK_LIBRARIES EXTRA_DEFINITIONS)
@@ -158,3 +195,11 @@ endfunction()
 
 # add targets
 add_subdirectory(cpp_to_py)
+
+# Install the lightweight Python tree expected by DREAMPlace's bundled GPUGR backend.
+install(FILES ${PROJECT_SOURCE_DIR}/cpp_to_py/__init__.py
+        DESTINATION ${XPLACE_INSTALL_CPP_DEST})
+install(FILES ${PROJECT_SOURCE_DIR}/utils/__init__.py ${PROJECT_SOURCE_DIR}/utils/io_parser.py
+        DESTINATION ${XPLACE_INSTALL_UTILS_DEST})
+install(FILES ${PATH_THIRDPARTY_ROOT}/flute/POWV9.dat ${PATH_THIRDPARTY_ROOT}/flute/POST9.dat
+        DESTINATION ${XPLACE_INSTALL_FLUTE_DEST})

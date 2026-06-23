@@ -27,4 +27,4 @@ target_compile_options(xplace_common PRIVATE -fPIC)
 
 install(TARGETS 
     xplace_common
-    DESTINATION ${XPLACE_LIB_DIR})
+    DESTINATION ${XPLACE_INSTALL_LIB_DEST})

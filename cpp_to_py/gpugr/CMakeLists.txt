@@ -28,4 +28,4 @@ target_compile_definitions(gpugr PRIVATE
                             ENABLE_CUDA=${TORCH_ENABLE_CUDA})
 
 
-install(TARGETS gpugr DESTINATION ${XPLACE_LIB_DIR})
+install(TARGETS gpugr DESTINATION ${XPLACE_INSTALL_LIB_DEST})
