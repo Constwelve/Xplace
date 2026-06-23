@@ -208,7 +208,10 @@ add_subdirectory(cpp_to_py)
 # Install the lightweight Python tree expected by DREAMPlace's bundled GPUGR backend.
 install(FILES ${PROJECT_SOURCE_DIR}/cpp_to_py/__init__.py
         DESTINATION ${XPLACE_INSTALL_CPP_DEST})
-install(FILES ${PROJECT_SOURCE_DIR}/utils/__init__.py ${PROJECT_SOURCE_DIR}/utils/io_parser.py
+install(FILES ${PROJECT_SOURCE_DIR}/utils/io_parser.py
         DESTINATION ${XPLACE_INSTALL_UTILS_DEST})
+install(FILES ${PROJECT_SOURCE_DIR}/utils/gpugr_only_init.py
+        DESTINATION ${XPLACE_INSTALL_UTILS_DEST}
+        RENAME __init__.py)
 install(FILES ${PATH_THIRDPARTY_ROOT}/flute/POWV9.dat ${PATH_THIRDPARTY_ROOT}/flute/POST9.dat
         DESTINATION ${XPLACE_INSTALL_FLUTE_DEST})
