@@ -106,6 +106,9 @@ if(NOT PYTHON_INCLUDE_DIRS)
   find_package(Python COMPONENTS Interpreter Development REQUIRED)
   set(PYTHON_INCLUDE_DIRS ${Python_INCLUDE_DIRS})
 endif()
+if(TARGET torch AND PYTHON_INCLUDE_DIRS)
+  list(APPEND TORCH_INCLUDE_DIRS ${PYTHON_INCLUDE_DIRS})
+endif()
 
 if(NOT TARGET torch)
   execute_process(COMMAND ${PYTHON_EXECUTABLE} -c 
