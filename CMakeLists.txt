@@ -154,6 +154,7 @@ if(NOT TARGET torch)
     )
 endif()
 
+if(NOT XPLACE_EMBEDDED_IN_DREAMPLACE)
 function(add_pytorch_extension target_name)
   set(multiValueArgs EXTRA_INCLUDE_DIRS EXTRA_LINK_LIBRARIES EXTRA_DEFINITIONS)
   cmake_parse_arguments(ARG "" "" "${multiValueArgs}" ${ARGN})
@@ -192,6 +193,7 @@ function(add_pytorch_extension target_name)
     ENABLE_CUDA=${TORCH_ENABLE_CUDA}
     ${ARG_EXTRA_DEFINITIONS})
 endfunction()
+endif()
 
 # add targets
 add_subdirectory(cpp_to_py)
